@@ -5,23 +5,17 @@ from django.db.models import ForeignKey, Prefetch
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.fields.reverse_related import ManyToOneRel
 from graphene import InputObjectType
+from graphene.relay.node import GlobalID
 from graphene.types.generic import GenericScalar
+from graphene.types.objecttype import ObjectTypeMeta
 from graphene.types.resolver import default_resolver
 from graphene_django import DjangoObjectType
 from graphql import GraphQLResolveInfo, GraphQLSchema
-from graphql.language.ast import (
-    FragmentSpreadNode,
-    InlineFragmentNode,
-    VariableNode,
-)
-from graphql.type.definition import (
-    GraphQLInterfaceType,
-    GraphQLUnionType,
-)
-
+from graphql.language.ast import FragmentSpreadNode, InlineFragmentNode, VariableNode
 from graphql.pyutils import Path
+from graphql.type.definition import GraphQLInterfaceType, GraphQLUnionType
 
-from .utils import is_iterable, get_field_def_compat
+from .utils import get_field_def_compat, is_iterable
 
 
 def query(queryset, info, **options):
@@ -188,6 +182,8 @@ class QueryOptimizer(object):
 
     def _optimize_field_by_name(self, store, model, selection, field_def):
         name = self._get_name_from_resolver(field_def.resolve)
+        if isinstance(name, ObjectTypeMeta) or not name:
+            name = selection.name.value
         if not name:
             return False
         model_field = self._get_model_field_from_name(model, name)
@@ -308,7 +304,10 @@ class QueryOptimizer(object):
         # For python 2 unbound method:
         if hasattr(resolve_id, "im_func"):
             resolve_id = resolve_id.im_func
-        return resolver == resolve_id
+        if isinstance(resolver, functools.partial) and resolver.func == GlobalID.id_resolver:
+            return resolver.args[0] == resolve_id
+        else:
+            return resolver == resolve_id
 
     def _get_model_field_from_name(self, model, name):
         try:
