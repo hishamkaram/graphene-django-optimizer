@@ -9,6 +9,7 @@ from graphene.relay.node import GlobalID
 from graphene.types.generic import GenericScalar
 from graphene.types.objecttype import ObjectTypeMeta
 from graphene.types.resolver import default_resolver
+from graphene.utils.str_converters import to_snake_case
 from graphene_django import DjangoObjectType
 from graphql import GraphQLResolveInfo, GraphQLSchema
 from graphql.language.ast import FragmentSpreadNode, InlineFragmentNode, VariableNode
@@ -30,7 +31,7 @@ def query(queryset, info, **options):
                                              then this will keep the "only" optimization enabled.
     """
 
-    return QueryOptimizer(info, **options).optimize(queryset)
+    return QueryOptimizer(info, queryset, **options).optimize(queryset)
 
 
 class QueryOptimizer(object):
@@ -38,9 +39,10 @@ class QueryOptimizer(object):
     Automatically optimize queries.
     """
 
-    def __init__(self, info, **options):
+    def __init__(self, info, queryset, **options):
         self.root_info = info
         self.disable_abort_only = options.pop("disable_abort_only", False)
+        self.annotations = queryset._query.annotations if hasattr(queryset, '_query') else {}
 
     def optimize(self, queryset):
         info = self.root_info
@@ -183,9 +185,15 @@ class QueryOptimizer(object):
     def _optimize_field_by_name(self, store, model, selection, field_def):
         name = self._get_name_from_resolver(field_def.resolve)
         if isinstance(name, ObjectTypeMeta) or not name:
-            name = selection.name.value
+            name = to_snake_case(selection.name.value)
         if not name:
             return False
+        if self.annotations:
+            if name in self.annotations:
+                store.only(name)
+                return True
+            elif f'prefetched_{name}' in self.annotations:
+                return True
         model_field = self._get_model_field_from_name(model, name)
         if not model_field:
             return False
@@ -349,6 +357,7 @@ class QueryOptimizerStore:
         self.select_list = []
         self.prefetch_list = []
         self.only_list = []
+        self.values_list = []
         self.disable_abort_only = disable_abort_only
 
     def select_related(self, name, store):
@@ -393,6 +402,10 @@ class QueryOptimizerStore:
             self.only_list = None
 
     def optimize_queryset(self, queryset):
+        _annotations = {}
+        if hasattr(queryset, '_query'):
+            _annotations = queryset._query.annotations
+            queryset._query.annotations = {}
         if self.select_list:
             queryset = queryset.select_related(*self.select_list)
 
@@ -401,6 +414,8 @@ class QueryOptimizerStore:
 
         if self.only_list:
             queryset = queryset.only(*self.only_list)
+        if _annotations:
+            queryset = queryset.annotate(**_annotations)
 
         return queryset
 
