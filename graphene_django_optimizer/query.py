@@ -354,7 +354,6 @@ class QueryOptimizerStore:
         self.select_list = []
         self.prefetch_list = []
         self.only_list = []
-        self.values_list = []
         self.disable_abort_only = disable_abort_only
 
     def select_related(self, name, store):
