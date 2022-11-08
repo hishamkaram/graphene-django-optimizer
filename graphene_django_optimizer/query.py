@@ -188,12 +188,9 @@ class QueryOptimizer(object):
             name = to_snake_case(selection.name.value)
         if not name:
             return False
-        if self.annotations:
-            if name in self.annotations:
-                store.only(name)
-                return True
-            elif f'prefetched_{name}' in self.annotations:
-                return True
+        if self.annotations and (name in self.annotations or f'prefetched_{name}' in self.annotations):
+            store.only(name)
+            return True
         model_field = self._get_model_field_from_name(model, name)
         if not model_field:
             return False
@@ -403,15 +400,17 @@ class QueryOptimizerStore:
 
     def optimize_queryset(self, queryset):
         _annotations = {}
-        if hasattr(queryset, '_query'):
-            _annotations = queryset._query.annotations
-            queryset._query.annotations = {}
+        if hasattr(queryset, 'query'):
+            _annotations = queryset.query.annotations
+            queryset.query.annotations = {}
         if self.select_list:
             queryset = queryset.select_related(*self.select_list)
 
         if self.prefetch_list:
             queryset = queryset.prefetch_related(*self.prefetch_list)
-
+        if _annotations:
+            _only = [*self.only_list]
+            self.only_list = [f for f in _only if f not in _annotations]
         if self.only_list:
             queryset = queryset.only(*self.only_list)
         if _annotations:
