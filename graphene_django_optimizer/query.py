@@ -12,7 +12,17 @@ from graphene.types.resolver import default_resolver
 from graphene.utils.str_converters import to_snake_case
 from graphene_django import DjangoObjectType
 from graphql import GraphQLResolveInfo, GraphQLSchema
-from graphql.language.ast import FragmentSpreadNode, InlineFragmentNode, VariableNode
+from .utils import get_field_def_compat
+from graphql.language.ast import (
+    FragmentSpreadNode,
+    InlineFragmentNode,
+    VariableNode,
+)
+from graphql.type.definition import (
+    GraphQLInterfaceType,
+    GraphQLUnionType,
+)
+
 from graphql.pyutils import Path
 from graphql.type.definition import GraphQLInterfaceType, GraphQLUnionType
 
@@ -46,7 +56,7 @@ class QueryOptimizer(object):
 
     def optimize(self, queryset):
         info = self.root_info
-        field_def = get_field_def_compat(
+        field_def = field_def = get_field_def_compat(
             info.schema, info.parent_type, info.field_nodes[0]
         )
         store = self._optimize_gql_selections(
