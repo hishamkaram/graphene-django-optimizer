@@ -374,6 +374,8 @@ class QueryOptimizerStore:
             else:
                 for only in store.only_list:
                     self.only_list.append(name + LOOKUP_SEP + only)
+                if not store.only_list and (store.prefetch_list or store.select_list):
+                    self.only_list.append(name)
 
     def prefetch_related(self, name, store, queryset):
         if store.select_list or store.only_list:
