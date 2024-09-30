@@ -193,7 +193,7 @@ class QueryOptimizer(object):
             store.abort_only_optimization()
 
     def _optimize_field_by_name(self, store, model, selection, field_def):
-        name = self._get_name_from_resolver(field_def.resolve)
+        name = self._get_name_from_resolver(field_def.resolve, model)
         if isinstance(name, ObjectTypeMeta) or not name:
             name = to_snake_case(selection.name.value)
         if not name:
@@ -208,6 +208,9 @@ class QueryOptimizer(object):
             store.only(name)
             return True
         if model_field.many_to_one or model_field.one_to_one:
+            if getattr(model_field, "primary_key", False):
+                store.only(name)
+                return True
             field_store = self._optimize_gql_selections(
                 self._get_type(field_def),
                 selection,
@@ -285,14 +288,14 @@ class QueryOptimizer(object):
                 source_item for source_item in source if source_item not in target
             ]
 
-    def _get_name_from_resolver(self, resolver):
+    def _get_name_from_resolver(self, resolver, model):
         optimization_hints = self._get_optimization_hints(resolver)
         if optimization_hints:
             name_fn = optimization_hints.model_field
             if name_fn:
                 return name_fn()
         if self._is_resolver_for_id_field(resolver):
-            return "id"
+            return model._meta.pk.name
         elif isinstance(resolver, functools.partial):
             resolver_fn = resolver
             if resolver_fn.func != default_resolver:
@@ -311,7 +314,7 @@ class QueryOptimizer(object):
             ):
                 return resolver_fn.args[0]
             if self._is_resolver_for_id_field(resolver_fn):
-                return "id"
+                return model._meta.pk.name
             return resolver_fn
 
     def _is_resolver_for_id_field(self, resolver):
