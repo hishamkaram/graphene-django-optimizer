@@ -5,8 +5,11 @@ from django.db.models import ForeignKey, Prefetch
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.fields.reverse_related import ManyToOneRel
 from graphene import InputObjectType
+from graphene.relay.node import GlobalID
 from graphene.types.generic import GenericScalar
+from graphene.types.objecttype import ObjectTypeMeta
 from graphene.types.resolver import default_resolver
+from graphene.utils.str_converters import to_snake_case
 from graphene_django import DjangoObjectType
 from graphql import GraphQLResolveInfo, GraphQLSchema
 from .utils import get_field_def_compat
@@ -21,8 +24,9 @@ from graphql.type.definition import (
 )
 
 from graphql.pyutils import Path
+from graphql.type.definition import GraphQLInterfaceType, GraphQLUnionType
 
-from .utils import is_iterable
+from .utils import get_field_def_compat, is_iterable
 
 
 def query(queryset, info, **options):
@@ -37,7 +41,7 @@ def query(queryset, info, **options):
                                              then this will keep the "only" optimization enabled.
     """
 
-    return QueryOptimizer(info, **options).optimize(queryset)
+    return QueryOptimizer(info, queryset, **options).optimize(queryset)
 
 
 class QueryOptimizer(object):
@@ -45,9 +49,10 @@ class QueryOptimizer(object):
     Automatically optimize queries.
     """
 
-    def __init__(self, info, **options):
+    def __init__(self, info, queryset, **options):
         self.root_info = info
         self.disable_abort_only = options.pop("disable_abort_only", False)
+        self.annotations = queryset._query.annotations if hasattr(queryset, '_query') else {}
 
     def optimize(self, queryset):
         info = self.root_info
@@ -188,9 +193,14 @@ class QueryOptimizer(object):
             store.abort_only_optimization()
 
     def _optimize_field_by_name(self, store, model, selection, field_def):
-        name = self._get_name_from_resolver(field_def.resolve)
+        name = self._get_name_from_resolver(field_def.resolve, model)
+        if isinstance(name, ObjectTypeMeta) or not name:
+            name = to_snake_case(selection.name.value)
         if not name:
             return False
+        if self.annotations:
+            if name in self.annotations or f'prefetched_{name}' in self.annotations:
+                return True
         model_field = self._get_model_field_from_name(model, name)
         if not model_field:
             return False
@@ -198,6 +208,9 @@ class QueryOptimizer(object):
             store.only(name)
             return True
         if model_field.many_to_one or model_field.one_to_one:
+            if getattr(model_field, "primary_key", False):
+                store.only(name)
+                return True
             field_store = self._optimize_gql_selections(
                 self._get_type(field_def),
                 selection,
@@ -275,14 +288,14 @@ class QueryOptimizer(object):
                 source_item for source_item in source if source_item not in target
             ]
 
-    def _get_name_from_resolver(self, resolver):
+    def _get_name_from_resolver(self, resolver, model):
         optimization_hints = self._get_optimization_hints(resolver)
         if optimization_hints:
             name_fn = optimization_hints.model_field
             if name_fn:
                 return name_fn()
         if self._is_resolver_for_id_field(resolver):
-            return "id"
+            return model._meta.pk.name
         elif isinstance(resolver, functools.partial):
             resolver_fn = resolver
             if resolver_fn.func != default_resolver:
@@ -301,7 +314,7 @@ class QueryOptimizer(object):
             ):
                 return resolver_fn.args[0]
             if self._is_resolver_for_id_field(resolver_fn):
-                return "id"
+                return model._meta.pk.name
             return resolver_fn
 
     def _is_resolver_for_id_field(self, resolver):
@@ -309,7 +322,10 @@ class QueryOptimizer(object):
         # For python 2 unbound method:
         if hasattr(resolve_id, "im_func"):
             resolve_id = resolve_id.im_func
-        return resolver == resolve_id
+        if isinstance(resolver, functools.partial) and resolver.func == GlobalID.id_resolver:
+            return resolver.args[0] == resolve_id
+        else:
+            return resolver == resolve_id
 
     def _get_model_field_from_name(self, model, name):
         try:
@@ -397,6 +413,10 @@ class QueryOptimizerStore:
             self.only_list = None
 
     def optimize_queryset(self, queryset):
+        _annotations = {}
+        if hasattr(queryset, 'query'):
+            _annotations = queryset.query.annotations
+            queryset.query.annotations = {}
         if self.select_list:
             queryset = queryset.select_related(*self.select_list)
 
@@ -404,7 +424,12 @@ class QueryOptimizerStore:
             queryset = queryset.prefetch_related(*self.prefetch_list)
 
         if self.only_list:
+            if _annotations:
+                _only = [*self.only_list]
+                self.only_list = [f for f in _only if f not in _annotations]
             queryset = queryset.only(*self.only_list)
+        if _annotations:
+            queryset = queryset.annotate(**_annotations)
 
         return queryset
 
